@@ -44,19 +44,32 @@ class Pslocationlocator extends Module
     // Install/Uninstall methods will be fully implemented in a later step
     public function install()
     {
+        if (Shop::isFeatureActive()) {
+            Shop::setContext(Shop::CONTEXT_ALL);
+        }
+
         if (!parent::install() ||
-            !$this->registerHook('actionCustomerAddressFormSubmit') || // Placeholder
-            !$this->registerHook('actionCarrierProcess') || // Placeholder
-            !$this->registerHook('displayOrderDetail') || // Placeholder
-            !$this->registerHook('displayAdminOrder') || // Placeholder
-            !$this->registerHook('actionPDFInvoiceRender') // Placeholder
-            // Hook for adding fields to address form will be needed
+            !$this->registerHook('actionCustomerAddressFormSubmit') ||
+            !$this->registerHook('actionCarrierProcess') ||
+            !$this->registerHook('displayOrderDetail') ||
+            !$this->registerHook('displayAdminOrder') ||
+            !$this->registerHook('actionPDFInvoiceRender') ||
+            !$this->registerHook('displayPDFInvoice') ||
+            !$this->registerHook('displayAddressForm') || // For address form modifications
+            !$this->registerHook('actionFrontControllerSetMedia') // For JS/CSS
         ) {
             return false;
         }
-        // Initialize default config values
+
+        if (!$this->installDb()) {
+            $this->_errors[] = $this->l('Failed to install database table.');
+            return false;
+        }
+
         Configuration::updateValue(PSLL_ALLOWED_CITIES, '');
         Configuration::updateValue(PSLL_ALLOWED_CARRIERS, '');
+        // Add other default configs if any
+
         return true;
     }
 
@@ -64,7 +77,40 @@ class Pslocationlocator extends Module
     {
         Configuration::deleteByName(PSLL_ALLOWED_CITIES);
         Configuration::deleteByName(PSLL_ALLOWED_CARRIERS);
+
+        if (!$this->uninstallDb()) {
+            // Log or handle error, but usually don't prevent uninstallation for this
+            PrestaShopLogger::addLog('Pslocationlocator: uninstallDb failed during uninstall.', 2);
+        }
+
+        // parent::uninstall() will unregister hooks
         return parent::uninstall();
+    }
+
+    protected function installDb()
+    {
+        $sql = "CREATE TABLE IF NOT EXISTS `" . _DB_PREFIX_ . "location_address` (
+            `id_address` INT(10) UNSIGNED NOT NULL,
+            `gps_latitude` DECIMAL(10, 8) DEFAULT NULL,
+            `gps_longitude` DECIMAL(11, 8) DEFAULT NULL,
+            PRIMARY KEY (`id_address`)
+        ) ENGINE=" . _MYSQL_ENGINE_ . " DEFAULT CHARSET=utf8;";
+
+        if (!Db::getInstance()->execute($sql)) {
+            $this->_errors[] = Db::getInstance()->getMsgError();
+            return false;
+        }
+        return true;
+    }
+
+    protected function uninstallDb()
+    {
+        $sql = "DROP TABLE IF EXISTS `" . _DB_PREFIX_ . "location_address`;";
+        if (!Db::getInstance()->execute($sql)) {
+            $this->_errors[] = Db::getInstance()->getMsgError();
+            return false;
+        }
+        return true;
     }
 
     /**
@@ -524,5 +570,192 @@ class Pslocationlocator extends Module
             PrestaShopLogger::addLog('Pslocationlocator: Exception in hookDisplayAdminOrder for address ID: ' . $id_address_delivery . '. Exc: ' . $e->getMessage(), 3);
         }
         return ''; // Return empty string if no data or error
+    }
+
+    public function hookActionPDFInvoiceRender($params)
+    {
+        if (!isset($params['object']) || !is_a($params['object'], 'OrderInvoice')) {
+            PrestaShopLogger::addLog('Pslocationlocator: OrderInvoice object not available in hookActionPDFInvoiceRender.', 2);
+            return;
+        }
+        if (!isset($params['smarty'])) {
+            PrestaShopLogger::addLog('Pslocationlocator: Smarty object not available in hookActionPDFInvoiceRender.', 2);
+            return;
+        }
+
+        /** @var OrderInvoice $invoice */
+        $invoice = $params['object'];
+        $id_order = (int)$invoice->id_order;
+
+        $order = new Order($id_order);
+        if (!Validate::isLoadedObject($order)) {
+            PrestaShopLogger::addLog('Pslocationlocator: Could not load order object for invoice. Order ID: ' . $id_order, 3);
+            return;
+        }
+
+        $id_address_delivery = (int)$order->id_address_delivery;
+        if (!$id_address_delivery) {
+            PrestaShopLogger::addLog('Pslocationlocator: No delivery address ID in order for invoice QR code. Order ID: ' . $id_order, 1);
+            return;
+        }
+
+        try {
+            // Ensure LocationAddress class is loaded (PrestaShop's autoloader should handle it)
+            if (!class_exists('LocationAddress')) {
+                 PrestaShopLogger::addLog('Pslocationlocator: LocationAddress class not found in hookActionPDFInvoiceRender.', 3);
+                 return; // Cannot proceed without the class
+            }
+            $locationAddress = new LocationAddress($id_address_delivery);
+
+            if (Validate::isLoadedObject($locationAddress) && $locationAddress->id_address == $id_address_delivery &&
+                isset($locationAddress->gps_latitude) && isset($locationAddress->gps_longitude) &&
+                trim((string)$locationAddress->gps_latitude) !== '' && trim((string)$locationAddress->gps_longitude) !== '' && // Check for non-empty strings explicitly
+                ((float)$locationAddress->gps_latitude != 0 || (float)$locationAddress->gps_longitude != 0)) {
+
+                $phpqrcode_path = $this->local_path . 'vendor/phpqrcode.php';
+                if (file_exists($phpqrcode_path)) {
+                    require_once $phpqrcode_path;
+                } else {
+                    PrestaShopLogger::addLog('Pslocationlocator: PHP QR Code library not found at ' . $phpqrcode_path, 3);
+                    $params['smarty']->assign('psll_qr_code_error', $this->l('QR Code library not found.'));
+                    return;
+                }
+
+                if (!class_exists('QRcode')) {
+                    PrestaShopLogger::addLog('Pslocationlocator: QRcode class not found after including phpqrcode.php.', 3);
+                    $params['smarty']->assign('psll_qr_code_error', $this->l('QR Code class not found.'));
+                    return;
+                }
+
+                $qr_content = $locationAddress->gps_latitude . ',' . $locationAddress->gps_longitude;
+                $qr_code_dir = $this->local_path . 'views/images/qrcodes/';
+                // The placeholder creates a .png named file but with text content. The actual library would create a binary PNG.
+                $qr_code_filename = 'qr_' . $id_order . '.png';
+                $qr_code_filepath = $qr_code_dir . $qr_code_filename;
+
+                if (!is_dir($qr_code_dir)) {
+                    if (!@mkdir($qr_code_dir, 0755, true)) {
+                        PrestaShopLogger::addLog('Pslocationlocator: Failed to create QR code directory: ' . $qr_code_dir . '. Check permissions.', 3);
+                        $params['smarty']->assign('psll_qr_code_error', $this->l('QR code directory creation failed.'));
+                        return;
+                    }
+                }
+
+                QRcode::png($qr_content, $qr_code_filepath, 'L', 4, 2);
+
+                if (file_exists($qr_code_filepath)) {
+                    $params['smarty']->assign('psll_qr_code_image_path', $qr_code_filepath);
+                    PrestaShopLogger::addLog('Pslocationlocator: QR Code (placeholder) generated for Order ID ' . $id_order . ' at ' . $qr_code_filepath, 1);
+                } else {
+                    PrestaShopLogger::addLog('Pslocationlocator: Failed to generate QR code (placeholder) file for Order ID ' . $id_order, 3);
+                    $params['smarty']->assign('psll_qr_code_error', $this->l('QR code generation failed.'));
+                }
+            } else {
+                 PrestaShopLogger::addLog('Pslocationlocator: No valid GPS data for QR Code. Order ID: ' . $id_order . ', Address ID: ' . $id_address_delivery, 1);
+                 $params['smarty']->assign('psll_qr_code_image_path', null); // Ensure it's null if no data
+            }
+        } catch (PrestaShopException $e) {
+            PrestaShopLogger::addLog('Pslocationlocator: PrestaShopException in hookActionPDFInvoiceRender for Order ID ' . $id_order . '. Exc: ' . $e->getMessage(), 3);
+            $params['smarty']->assign('psll_qr_code_error', $this->l('QR code generation error (PrestaShopException).'));
+        } catch (Exception $e) { // Catch generic exceptions too
+            PrestaShopLogger::addLog('Pslocationlocator: Generic Exception in hookActionPDFInvoiceRender for Order ID ' . $id_order . '. Exc: ' . $e->getMessage(), 3);
+            $params['smarty']->assign('psll_qr_code_error', $this->l('QR code generation error (Exception).'));
+        }
+    }
+
+    public function hookDisplayPDFInvoice($params)
+    {
+        if (!isset($params['smarty'])) {
+            PrestaShopLogger::addLog('Pslocationlocator: Smarty object not available in hookDisplayPDFInvoice.', 2);
+            return '';
+        }
+
+        $smarty = $params['smarty'];
+        // Variables assigned in hookActionPDFInvoiceRender should be accessible here.
+        $qr_code_path = $smarty->getTemplateVars('psll_qr_code_image_path');
+        $qr_code_error = $smarty->getTemplateVars('psll_qr_code_error'); // Check if an error was already set
+
+        if (!empty($qr_code_error)) {
+             PrestaShopLogger::addLog('Pslocationlocator: Not rendering QR code due to prior error: ' . $qr_code_error . (isset($params['object']->id_order) ? ' Order ID: '.$params['object']->id_order : ''), 2);
+             return '';
+        }
+
+        if (!empty($qr_code_path) && file_exists($qr_code_path)) {
+            // All good, display the template that shows the QR code.
+            // The smarty variable psll_qr_code_image_path is already set from the previous hook.
+            return $this->display(__FILE__, 'views/templates/hook/displayPDFInvoice.tpl');
+        } else {
+            // Only log if no specific error was previously set, and path is missing/invalid.
+            $order_id_log = isset($params['object']->id_order) ? ' Order ID: '.$params['object']->id_order : ' (Order ID not available in params)';
+            if (empty($qr_code_error)) { // Avoid double logging if error was already set and handled
+                 PrestaShopLogger::addLog('Pslocationlocator: QR code path not found or file does not exist in hookDisplayPDFInvoice (no prior error set).'.$order_id_log , 1); // Info level
+            }
+        }
+        return ''; // Return empty if no QR code to display or error occurred.
+    }
+
+    public function hookActionFrontControllerSetMedia($params)
+    {
+        // Only load on specific controllers (address, order, identity)
+        $allowed_controllers = array('address', 'identity', 'order', 'orderopc'); // orderopc for one-page checkout
+        $current_controller = Tools::strtolower($this->context->controller->php_self);
+
+        if (in_array($current_controller, $allowed_controllers)) {
+            // Check if country is Iran to potentially pass JsDef, or rely on hookDisplayAddressForm condition
+            // For now, always load JS/CSS on address pages, JS itself checks for button.
+            $this->context->controller->addCSS($this->_path . 'views/assets/css/gps_address.css');
+            $this->context->controller->addJS($this->_path . 'views/assets/js/gps_address.js');
+
+            // Pass Country ID for Iran to JavaScript if needed by JS logic
+            // $id_iran = (int)Country::getByIso('IR');
+            // Media::addJsDef(array('psll_id_country_iran' => $id_iran));
+            // The current JS doesn't strictly require this if button is conditionally rendered by PHP.
+        }
+    }
+
+    public function hookDisplayAddressForm($params)
+    {
+        // This hook is typically called for an existing address.
+        // $params['address'] contains the Address object.
+        // If it's a new address form, we might need to check default country or selected country.
+
+        $id_country_current_form = 0;
+        if (Tools::isSubmit('id_country')) {
+            $id_country_current_form = (int)Tools::getValue('id_country');
+        } elseif (isset($params['address']->id_country) && $params['address']->id_country) {
+            $id_country_current_form = (int)$params['address']->id_country;
+        } elseif (isset($this->context->country->id)) { // Default context country
+            $id_country_current_form = (int)$this->context->country->id;
+        }
+
+        $id_iran = (int)Country::getByIso('IR');
+
+        if ($id_country_current_form == $id_iran) {
+            // Country is Iran, display the GPS button and fields
+
+            // Get existing GPS data if available for this address (if editing)
+            $gps_latitude = '';
+            $gps_longitude = '';
+            if (isset($params['address']->id) && $params['address']->id) {
+                try {
+                    $locationAddress = new LocationAddress((int)$params['address']->id);
+                    if (Validate::isLoadedObject($locationAddress)) {
+                        $gps_latitude = $locationAddress->gps_latitude;
+                        $gps_longitude = $locationAddress->gps_longitude;
+                    }
+                } catch (PrestaShopException $e) {
+                    // Log error, but don't break form display
+                    PrestaShopLogger::addLog('Pslocationlocator: Error loading LocationAddress in hookDisplayAddressForm: ' . $e->getMessage(), 2);
+                }
+            }
+
+            $this->context->smarty->assign(array(
+                'psll_existing_latitude' => $gps_latitude,
+                'psll_existing_longitude' => $gps_longitude,
+            ));
+            return $this->display(__FILE__, 'views/templates/hook/displayAddressFormFields.tpl');
+        }
+
+        return ''; // Do not display if not Iran
     }
 }
