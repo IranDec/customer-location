@@ -39,6 +39,7 @@ class Pslocationlocator extends Module
         // Define configuration keys
         define('PSLL_ALLOWED_CITIES', 'PSLL_ALLOWED_CITIES');
         define('PSLL_ALLOWED_CARRIERS', 'PSLL_ALLOWED_CARRIERS');
+        define('PSLL_ENABLED_COUNTRIES_FOR_CITIES', 'PSLL_ENABLED_COUNTRIES_FOR_CITIES');
     }
 
     // Install/Uninstall methods will be fully implemented in a later step
@@ -70,6 +71,14 @@ class Pslocationlocator extends Module
         Configuration::updateValue(PSLL_ALLOWED_CARRIERS, '');
         // Add other default configs if any
 
+        // Set Iran as the default country for enabled city dropdown
+        $id_iran_default = (int)Country::getByIso('IR');
+        if ($id_iran_default == 0) {
+            // If Iran by ISO is not found, try by name as a fallback, though less reliable
+            $id_iran_default = (int)Country::getIdByName($this->context->language->id, 'Iran');
+        }
+        Configuration::updateValue(PSLL_ENABLED_COUNTRIES_FOR_CITIES, (string)$id_iran_default);
+
         return true;
     }
 
@@ -77,6 +86,7 @@ class Pslocationlocator extends Module
     {
         Configuration::deleteByName(PSLL_ALLOWED_CITIES);
         Configuration::deleteByName(PSLL_ALLOWED_CARRIERS);
+        Configuration::deleteByName(PSLL_ENABLED_COUNTRIES_FOR_CITIES);
 
         if (!$this->uninstallDb()) {
             // Log or handle error, but usually don't prevent uninstallation for this
@@ -194,6 +204,19 @@ class Pslocationlocator extends Module
                         'rows' => 5,
                     ),
                     array(
+                        'type' => 'select',
+                        'label' => $this->l('Enabled Countries for City Dropdown'),
+                        'name' => PSLL_ENABLED_COUNTRIES_FOR_CITIES . '[]', // Name for array submission
+                        'desc' => $this->l('Select countries where the city dropdown will be active. (Ctrl+Click for multiple)'),
+                        'multiple' => true,
+                        'class' => 'chosen',
+                        'options' => array(
+                            'query' => $this->getCountryOptions(), // Method to get countries
+                            'id' => 'id_country',    // Key for option value
+                            'name' => 'name'         // Key for option label
+                        )
+                    ),
+                    array(
                         'type' => 'checkbox',
                         'label' => $this->l('Allowed Carriers'),
                         'name' => PSLL_ALLOWED_CARRIERS, // Name for the group of checkboxes
@@ -234,7 +257,33 @@ class Pslocationlocator extends Module
             $config_values[PSLL_ALLOWED_CARRIERS . '_' . trim($carrier_id)] = true;
         }
 
+        // For the multi-select country field
+        $enabled_countries_str = Configuration::get(PSLL_ENABLED_COUNTRIES_FOR_CITIES);
+        $selected_countries_array = array();
+        if (!empty($enabled_countries_str)) {
+            $selected_countries_array = explode(',', $enabled_countries_str);
+        }
+        // Ensure the array contains integers, as expected by HelperForm for multi-select chosen
+        $selected_countries_array = array_map('intval', $selected_countries_array);
+
+        // The key must match the 'name' attribute of the input field, including '[]'
+        $config_values[PSLL_ENABLED_COUNTRIES_FOR_CITIES . '[]'] = $selected_countries_array;
+
+
         return $config_values;
+    }
+
+    protected function getCountryOptions()
+    {
+        $countries = Country::getCountries($this->context->language->id, true);
+        $options = array();
+        foreach ($countries as $country) {
+            $options[] = array(
+                'id_country' => $country['id_country'],
+                'name' => $country['name'],
+            );
+        }
+        return $options;
     }
 
     /**
@@ -249,6 +298,19 @@ class Pslocationlocator extends Module
 
             Configuration::updateValue(PSLL_ALLOWED_CITIES, trim($allowed_cities));
             $output .= $this->displayConfirmation($this->l('Settings updated for cities.'));
+
+            // Handle enabled countries for city dropdown
+            $enabled_countries_for_cities = Tools::getValue(PSLL_ENABLED_COUNTRIES_FOR_CITIES); // This will be an array due to [] in name
+            if (is_array($enabled_countries_for_cities)) {
+                $enabled_countries_for_cities_ids = array_map('intval', $enabled_countries_for_cities);
+                Configuration::updateValue(PSLL_ENABLED_COUNTRIES_FOR_CITIES, implode(',', $enabled_countries_for_cities_ids));
+                $output .= $this->displayConfirmation($this->l('Enabled countries for city dropdown updated.'));
+            } else {
+                // Handle case where it might not be an array (e.g. if nothing is selected and form submits empty value)
+                Configuration::updateValue(PSLL_ENABLED_COUNTRIES_FOR_CITIES, '');
+                 $output .= $this->displayWarning($this->l('No countries selected for city dropdown. Setting was cleared.'));
+            }
+
 
             // Handle allowed carriers checkboxes
             $selected_carriers = array();
@@ -729,33 +791,64 @@ class Pslocationlocator extends Module
         }
 
         $id_iran = (int)Country::getByIso('IR');
+        $show_gps_button = ($id_country_current_form == $id_iran);
 
-        if ($id_country_current_form == $id_iran) {
-            // Country is Iran, display the GPS button and fields
-
-            // Get existing GPS data if available for this address (if editing)
-            $gps_latitude = '';
-            $gps_longitude = '';
-            if (isset($params['address']->id) && $params['address']->id) {
-                try {
-                    $locationAddress = new LocationAddress((int)$params['address']->id);
-                    if (Validate::isLoadedObject($locationAddress)) {
-                        $gps_latitude = $locationAddress->gps_latitude;
-                        $gps_longitude = $locationAddress->gps_longitude;
-                    }
-                } catch (PrestaShopException $e) {
-                    // Log error, but don't break form display
-                    PrestaShopLogger::addLog('Pslocationlocator: Error loading LocationAddress in hookDisplayAddressForm: ' . $e->getMessage(), 2);
-                }
-            }
-
-            $this->context->smarty->assign(array(
-                'psll_existing_latitude' => $gps_latitude,
-                'psll_existing_longitude' => $gps_longitude,
-            ));
-            return $this->display(__FILE__, 'views/templates/hook/displayAddressFormFields.tpl');
+        // City Dropdown Logic
+        $enabled_countries_for_cities_str = Configuration::get(PSLL_ENABLED_COUNTRIES_FOR_CITIES, '');
+        $enabled_country_ids = array();
+        if (!empty($enabled_countries_for_cities_str)) {
+            $enabled_country_ids = array_map('intval', explode(',', $enabled_countries_for_cities_str));
         }
 
-        return ''; // Do not display if not Iran
+        $show_city_dropdown = false;
+        $cities_list = array();
+
+        if (in_array($id_country_current_form, $enabled_country_ids)) {
+            $show_city_dropdown = true;
+            $allowed_cities_str = Configuration::get(PSLL_ALLOWED_CITIES, '');
+            if (!empty($allowed_cities_str)) {
+                $cities_list = array_map('trim', explode(',', $allowed_cities_str));
+                // Remove empty city names that might result from ",," or trailing commas
+                $cities_list = array_filter($cities_list, function($city) {
+                    return !empty($city);
+                });
+            }
+        }
+
+        // Get existing address data (city, gps)
+        $existing_city = '';
+        $gps_latitude = '';
+        $gps_longitude = '';
+
+        if (isset($params['address']->id) && $params['address']->id) {
+            $address_object = $params['address']; // Address Object
+            $existing_city = $address_object->city;
+            try {
+                $locationAddress = new LocationAddress((int)$params['address']->id);
+                if (Validate::isLoadedObject($locationAddress)) {
+                    $gps_latitude = $locationAddress->gps_latitude;
+                    $gps_longitude = $locationAddress->gps_longitude;
+                }
+            } catch (PrestaShopException $e) {
+                PrestaShopLogger::addLog('Pslocationlocator: Error loading LocationAddress: ' . $e->getMessage(), 2);
+            }
+        } elseif (Tools::isSubmit('city')) { // Pre-fill from form submission if validation fails
+            $existing_city = Tools::getValue('city');
+        }
+
+
+        $this->context->smarty->assign(array(
+            'psll_show_gps_button' => $show_gps_button, // For GPS button
+            'psll_existing_latitude' => $gps_latitude,
+            'psll_existing_longitude' => $gps_longitude,
+
+            'psll_show_city_dropdown' => $show_city_dropdown, // For City Dropdown
+            'psll_cities_list' => $cities_list,
+            'psll_current_city' => $existing_city, // Pass current city for pre-selection
+        ));
+
+        // The main template file path should be returned.
+        // It will decide internally what to show based on the assigned smarty variables.
+        return $this->display(__FILE__, 'views/templates/hook/displayAddressFormFields.tpl');
     }
 }
