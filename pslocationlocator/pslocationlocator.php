@@ -300,7 +300,7 @@ class Pslocationlocator extends Module
             $output .= $this->displayConfirmation($this->l('Settings updated for cities.'));
 
             // Handle enabled countries for city dropdown
-            $enabled_countries_for_cities = Tools::getValue(PSLL_ENABLED_COUNTRIES_FOR_CITIES); // This will be an array due to [] in name
+            $enabled_countries_for_cities = Tools::getValue(PSLL_ENABLED_COUNTRIES_FOR_CITIES . '[]'); // This will be an array due to [] in name
             if (is_array($enabled_countries_for_cities)) {
                 $enabled_countries_for_cities_ids = array_map('intval', $enabled_countries_for_cities);
                 Configuration::updateValue(PSLL_ENABLED_COUNTRIES_FOR_CITIES, implode(',', $enabled_countries_for_cities_ids));
