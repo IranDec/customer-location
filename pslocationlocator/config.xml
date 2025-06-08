@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<module>
+    <name>pslocationlocator</name>
+    <displayName><![CDATA[Location Locator]]></displayName>
+    <version><![CDATA[1.0.0]]></version>
+    <description><![CDATA[Captures GPS location on address form (for Iran) and enhances order details with location data. Also adds location QR code to invoices.]]></description>
+    <author><![CDATA[Mohammad Babaei]]></author>
+    <tab><![CDATA[shipping_logistics]]></tab> <!-- Common tabs: shipping_logistics, front_office_features, administration, others -->
+    <is_configurable>1</is_configurable>
+    <need_instance>1</need_instance>
+    <limited_countries></limited_countries> <!-- Can specify 'IR' here if the entire module functionality is restricted, but features are selectively for IR -->
+    <ps_versions_compliancy>
+        <min><![CDATA[1.7.8.0]]></min>
+        <max><![CDATA[1.7.8.99]]></max>
+    </ps_versions_compliancy>
+</module>
