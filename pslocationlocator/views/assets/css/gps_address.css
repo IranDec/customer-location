@@ -1,0 +1,69 @@
+/**
+ * طراح
+ * Mohammad Babaei
+ * وب‌سایت https://adschi.com
+ */
+
+/* Container for the GPS feature elements */
+#psll-gps-feature-container {
+    margin-top: 10px;
+    margin-bottom: 10px;
+    padding: 10px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    background-color: #f9f9f9;
+}
+
+/* Styling for the Get GPS Location button */
+#get-gps-location-btn {
+    background-color: #5cb85c; /* Green */
+    color: white;
+    padding: 8px 15px;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 1em;
+    margin-bottom: 5px;
+    display: inline-block; /* Or block if it should take full width */
+}
+
+#get-gps-location-btn:hover {
+    background-color: #4cae4c;
+}
+
+#get-gps-location-btn:disabled {
+    background-color: #ccc;
+    cursor: not-allowed;
+}
+
+/* Styling for the GPS status message area */
+#gps-status-message {
+    margin-top: 5px;
+    padding: 8px;
+    border-radius: 4px;
+    font-size: 0.9em;
+    display: block; /* Ensure it takes its own line */
+}
+
+#gps-status-message.info {
+    color: #31708f; /* Blue */
+    background-color: #d9edf7;
+    border: 1px solid #bce8f1;
+}
+
+#gps-status-message.success {
+    color: #3c763d; /* Dark Green */
+    background-color: #dff0d8;
+    border: 1px solid #d6e9c6;
+}
+
+#gps-status-message.error {
+    color: #a94442; /* Red */
+    background-color: #f2dede;
+    border: 1px solid #ebccd1;
+}
+
+/* Initially hide the status message if it's empty, JS will show it with content */
+#gps-status-message:empty {
+    display: none;
+}
