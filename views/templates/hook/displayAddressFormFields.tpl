@@ -25,6 +25,8 @@
                     </option>
                 {/foreach}
             </select>
+            {* The original city text input will be hidden by JavaScript (Step 4) *}
+            {* We are providing a new select element with name="city" *}
         </div>
     </div>
 {/if}
@@ -33,20 +35,14 @@
     <div class="form-group row">
         <label class="col-md-3 form-control-label">{l s='GPS Location' mod='pslocationlocator'}</label>
         <div class="col-md-7">
-            {* Corrected ID here to match original intent and previous JS if it was targeting this directly.
-               However, JS was last updated to use #psll_get_location_btn.
-               For consistency with the *last* JS update, this should be id="psll_get_location_btn".
-               If the JS is simpler to change back, this could be "get-gps-location-btn".
-               Given the review point, the JS has #psll_get_location_btn, so TPL should match.
-            *}
             <button type="button" id="psll_get_location_btn" class="btn btn-primary">{l s='Get My Current Location' mod='pslocationlocator'}</button>
-            <small id="psll_gps_status" class="form-text text-muted"></small> {# JS uses #psll_gps_status #}
+            <small id="psll_gps_status" class="form-text text-muted"></small>
         </div>
     </div>
 
     {* Hidden fields to store GPS coordinates. These will be populated by JavaScript. *}
-    <input type="hidden" name="gps_latitude" id="psll_gps_latitude" value="{$psll_existing_latitude|escape:'htmlall':'UTF-8'}"> {# JS uses #psll_gps_latitude #}
-    <input type="hidden" name="gps_longitude" id="psll_gps_longitude" value="{$psll_existing_longitude|escape:'htmlall':'UTF-8'}"> {# JS uses #psll_gps_longitude #}
+    <input type="hidden" name="gps_latitude" id="psll_gps_latitude" value="{$psll_existing_latitude|escape:'htmlall':'UTF-8'}">
+    <input type="hidden" name="gps_longitude" id="psll_gps_longitude" value="{$psll_existing_longitude|escape:'htmlall':'UTF-8'}">
 
     {* Optional: Display current coordinates if they exist for debugging or info *}
     {if $psll_existing_latitude && $psll_existing_longitude}
